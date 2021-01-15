@@ -5,12 +5,14 @@ import numpy as np
 import io
 from collections import defaultdict
 import importlib
+import os
 
 from .calibration import (
     TensorBatchDataset,
     DatasetCalibrator,
     DEFAULT_CALIBRATION_ALGORITHM,
 )
+
 
 # UTILITY FUNCTIONS
 
@@ -112,11 +114,11 @@ def check_torch_dtype(*tensors):
             else:
                 assert dtype == t.dtype  # , 'Tensor data types must match')
     assert (
-        dtype is not None
+            dtype is not None
     )  # , 'Data type could not be inferred from any item in list')
     return dtype
 
-    
+
 def add_missing_trt_tensors(network, tensors):
     """Creates missing TensorRT tensors as constants and attaches them to the Torch Tensors"""
     trt_tensors = [None] * len(tensors)
@@ -139,7 +141,7 @@ def add_missing_trt_tensors(network, tensors):
 
         # or... add constant for leaf tensor w/o _trt
         else:
-            
+
             # remove all preceding ones, these can be re-inserted later when broadcasting
             num_preceding_ones = 0
             for j in range(len(t.shape)):
@@ -148,25 +150,24 @@ def add_missing_trt_tensors(network, tensors):
                 else:
                     break
             shape = tuple(t.shape[num_preceding_ones:])
-            
+
             weight = t.detach().cpu().numpy()
             t._trt = network.add_constant(shape, weight).get_output(0)
             trt_tensor = t._trt
-
 
         assert trt_tensor is not None
 
         trt_tensors[i] = trt_tensor
 
     return trt_tensors
-    
+
 
 def broadcast_trt_tensors(network, trt_tensors, broadcast_ndim):
     """Broadcast TensorRT tensors to the specified dimension by pre-padding shape 1 dims"""
     broadcasted_trt_tensors = [None] * len(trt_tensors)
-    
+
     for i, t in enumerate(trt_tensors):
-        
+
         if len(t.shape) < broadcast_ndim:
             # append 1 size dims to front
             diff = broadcast_ndim - len(t.shape)
@@ -178,10 +179,10 @@ def broadcast_trt_tensors(network, trt_tensors, broadcast_ndim):
             trt_tensor = t
 
         broadcasted_trt_tensors[i] = trt_tensor
-        
+
     return broadcasted_trt_tensors
-    
-    
+
+
 def trt_(network, *tensors):
     """Creates missing TensorRT tensors and adds shuffle layers to make tensors broadcastable"""
     trt_tensors = [None] * len(tensors)
@@ -213,7 +214,7 @@ def trt_(network, *tensors):
         # or... add constant for leaf tensor w/o _trt
         elif isinstance(t, torch.Tensor) and not hasattr(t, "_trt"):
             # add leaf tensor
-            shape = tuple(t.shape)  #  don't exclude batch when adding constants...?
+            shape = tuple(t.shape)  # don't exclude batch when adding constants...?
             weight = t.detach().cpu().numpy()
             t._trt = network.add_constant(shape, weight).get_output(0)
             trt_tensor = t._trt
@@ -317,8 +318,10 @@ class ConversionHook(object):
     def __exit__(self, type, val, tb):
         self._set_method(self.converter['method_impl'])
 
+
 def default_input_names(num_inputs):
     return ["input_%d" % i for i in range(num_inputs)]
+
 
 def default_output_names(num_outputs):
     return ["output_%d" % i for i in range(num_outputs)]
@@ -421,14 +424,14 @@ class TRTModule(torch.nn.Module):
         state_dict[prefix + "output_names"] = self.output_names
 
     def _load_from_state_dict(
-        self,
-        state_dict,
-        prefix,
-        local_metadata,
-        strict,
-        missing_keys,
-        unexpected_keys,
-        error_msgs,
+            self,
+            state_dict,
+            prefix,
+            local_metadata,
+            strict,
+            missing_keys,
+            unexpected_keys,
+            error_msgs,
     ):
         engine_bytes = state_dict[prefix + "engine"]
 
@@ -472,23 +475,22 @@ class TRTModule(torch.nn.Module):
         if not self.context.profiler:
             self.context.profiler = trt.Profiler()
 
-    
-def torch2trt(module, 
-              inputs, 
-              input_names=None, 
-              output_names=None, 
-              log_level=trt.Logger.ERROR, 
+
+def torch2trt(module,
+              inputs,
+              input_names=None,
+              output_names=None,
+              log_level=trt.Logger.ERROR,
               max_batch_size=1,
-              fp16_mode=False, 
-              max_workspace_size=1<<25, 
-              strict_type_constraints=False, 
-              keep_network=True, 
-              int8_mode=False, 
+              fp16_mode=False,
+              max_workspace_size=1 << 25,
+              strict_type_constraints=False,
+              keep_network=True,
+              int8_mode=False,
               int8_calib_dataset=None,
               int8_calib_algorithm=DEFAULT_CALIBRATION_ALGORITHM,
               int8_calib_batch_size=1,
               use_onnx=False):
-
     inputs_in = inputs
 
     # copy inputs to avoid modifications to source data
@@ -496,24 +498,24 @@ def torch2trt(module,
 
     logger = trt.Logger(log_level)
     builder = trt.Builder(logger)
-    
+
     if isinstance(inputs, list):
         inputs = tuple(inputs)
     if not isinstance(inputs, tuple):
         inputs = (inputs,)
-        
+
     # run once to get num outputs
     outputs = module(*inputs)
     if not isinstance(outputs, tuple) and not isinstance(outputs, list):
         outputs = (outputs,)
-        
+
     if input_names is None:
         input_names = default_input_names(len(inputs))
     if output_names is None:
         output_names = default_output_names(len(outputs))
-        
+
     if use_onnx:
-            
+
         f = io.BytesIO()
         torch.onnx.export(module, inputs, f, input_names=input_names, output_names=output_names)
         f.seek(0)
@@ -521,7 +523,7 @@ def torch2trt(module,
         network = builder.create_network(1 << int(trt.NetworkDefinitionCreationFlag.EXPLICIT_BATCH))
         parser = trt.OnnxParser(network, logger)
         parser.parse(onnx_bytes)
-        
+
     else:
         network = builder.create_network()
         with ConversionContext(network) as ctx:
@@ -562,11 +564,101 @@ def torch2trt(module,
     return module_trt
 
 
+def build_tensorRT_model(module,
+                         inputs,
+                         input_names=None,
+                         output_names=None,
+                         log_level=trt.Logger.ERROR,
+                         max_batch_size=1,
+                         fp16_mode=False,
+                         max_workspace_size=1 << 25,
+                         strict_type_constraints=False,
+                         int8_mode=False,
+                         int8_calib_dataset=None,
+                         int8_calib_algorithm=DEFAULT_CALIBRATION_ALGORITHM,
+                         int8_calib_batch_size=1,
+                         engine_name='./model.engine'):
+    inputs_in = inputs
+
+    # copy inputs to avoid modifications to source data
+    inputs = [tensor.clone()[0:1] for tensor in inputs]  # only run single entry
+
+    logger = trt.Logger(log_level)
+    builder = trt.Builder(logger)
+
+    if isinstance(inputs, list):
+        inputs = tuple(inputs)
+    if not isinstance(inputs, tuple):
+        inputs = (inputs,)
+
+    # run once to get num outputs
+    outputs = module(*inputs)
+    if not isinstance(outputs, tuple) and not isinstance(outputs, list):
+        outputs = (outputs,)
+
+    if input_names is None:
+        input_names = default_input_names(len(inputs))
+    if output_names is None:
+        output_names = default_output_names(len(outputs))
+
+    network = builder.create_network()
+    with ConversionContext(network) as ctx:
+
+        ctx.add_inputs(inputs, input_names)
+
+        outputs = module(*inputs)
+
+        if not isinstance(outputs, tuple) and not isinstance(outputs, list):
+            outputs = (outputs,)
+        ctx.mark_outputs(outputs, output_names)
+
+    builder.max_workspace_size = max_workspace_size
+    builder.fp16_mode = fp16_mode
+    builder.max_batch_size = max_batch_size
+    builder.strict_type_constraints = strict_type_constraints
+
+    if int8_mode:
+
+        # default to use input tensors for calibration
+        if int8_calib_dataset is None:
+            int8_calib_dataset = TensorBatchDataset(inputs_in)
+
+        builder.int8_mode = True
+
+        # @TODO(jwelsh):  Should we set batch_size=max_batch_size?  Need to investigate memory consumption
+        builder.int8_calibrator = DatasetCalibrator(
+            inputs, int8_calib_dataset, batch_size=int8_calib_batch_size, algorithm=int8_calib_algorithm
+        )
+
+    engine = builder.build_cuda_engine(network)
+
+    os.makedirs(os.path.abspath(os.path.dirname(engine_name)), exist_ok=True)
+    with open(engine_name, "wb") as f:
+        f.write(engine.serialize())
+    return input_names, output_names
+
+
+def load_tensorRT_model(engine_path, input_names, output_names):
+    """
+
+    :param engine_path:
+    :param input_names:
+    :param output_names:
+    :return:
+    """
+    trt_logger = trt.Logger(trt.Logger.WARNING)
+    with open(engine_path, "rb") as f, trt.Runtime(trt_logger) as runtime:
+        engine = runtime.deserialize_cuda_engine(f.read())
+
+    model = TRTModule(engine, input_names, output_names)
+    return model
+
+
 # DEFINE ALL CONVERSION FUNCTIONS
 
 def get_module_qualname(name):
     s = name.split('.')
-    
+
     for i in range(len(s)):
         idx = len(s) - i - 1
         modulename, qualname = ".".join(s[:idx]), ".".join(s[idx:])
@@ -575,23 +667,23 @@ def get_module_qualname(name):
             return module, modulename, qualname
         except:
             pass
-        
+
     raise RuntimeError("Could not import module")
-    
+
 
 def tensorrt_converter(method, is_real=True, enabled=True, imports=[]):
-    
     if isinstance(method, str):
         module, module_name, qual_name = get_module_qualname(method)
     else:
-        module, module_name, qual_name = importlib.import_module(method.__module__), method.__module__, method.__qualname__
-        
+        module, module_name, qual_name = importlib.import_module(
+            method.__module__), method.__module__, method.__qualname__
+
     method_impl = eval('copy.deepcopy(module.%s)' % qual_name)
-    
+
     def register_converter(converter):
         CONVERTERS[method] = {
-            "converter": converter, 
-            "is_real": is_real, 
+            "converter": converter,
+            "is_real": is_real,
             "module": module,
             "module_name": module_name,
             "qual_name": qual_name,

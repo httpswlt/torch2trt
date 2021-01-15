@@ -10,6 +10,7 @@ from .BatchNorm2d import *
 from .Conv import *
 from .Conv1d import *
 from .Conv2d import *
+from .f_conv2d import *
 from .ConvTranspose import *
 from .ConvTranspose2d import *
 from .Linear import *
@@ -25,7 +26,6 @@ from .chunk import *
 from .clamp import *
 from .compare import *
 from .div import *
-from .expand import *
 from .getitem import *
 from .identity import *
 from .instance_norm import *
